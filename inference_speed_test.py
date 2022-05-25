@@ -8,9 +8,11 @@ python inference_speed_test.py \
 
 import argparse
 import torch
+import time
 from tqdm import tqdm
 
 from model.model import MattingNetwork
+from utils import com_speed_test
 
 torch.backends.cudnn.benchmark = True
 
@@ -38,13 +40,26 @@ class InferenceSpeedTest:
         self.model = torch.jit.freeze(self.model)
     
     def loop(self):
+        start_time = 0
+        consumed_time = 0
+        count = 0
         w, h = self.args.resolution
         src = torch.randn((1, 3, h, w), device=self.device, dtype=self.precision)
         with torch.no_grad():
             rec = None, None, None, None
+            start_time = time.time()
             for _ in tqdm(range(1000)):
                 fgr, pha, *rec = self.model(src, *rec, self.args.downsample_ratio)
+                com_speed_test(pha)
                 torch.cuda.synchronize()
+                count += 1
+        consumed_time += (time.time() - start_time)
+        fps = count / consumed_time
+        print('inference speed test...')
+        print('....')
+        print('FPS on resolution[{}x{}]: {}'.format(w, h, fps))
+        print('....')
+        print('finshed...')
 
 if __name__ == '__main__':
     InferenceSpeedTest()

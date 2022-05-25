@@ -12,14 +12,18 @@ python inference.py \
     --seq-chunk 1
 """
 
-import torch
 import os
+import sys
+import torch
+import shutil
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
 
 from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
+
+from utils import result2composition, result2mask, run_eval_miou
 
 def convert_video(model,
                   input_source: str,
@@ -118,25 +122,29 @@ def convert_video(model,
         with torch.no_grad():
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
             rec = [None] * 4
-            for src in reader:
+            for src, img_path in reader:
 
                 if downsample_ratio is None:
                     downsample_ratio = auto_downsample_ratio(*src.shape[2:])
 
                 src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
                 fgr, pha, *rec = model(src, *rec, downsample_ratio)
+                # fgr, pha = model(src, downsample_ratio)[:2]
 
                 if output_foreground is not None:
                     writer_fgr.write(fgr[0])
                 if output_alpha is not None:
-                    writer_pha.write(pha[0])
+                    # writer_pha.write(pha[0])
+                    result2mask(pha[0], img_path[0], output_source=output_alpha)
                 if output_composition is not None:
                     if output_type == 'video':
                         com = fgr * pha + bgr * (1 - pha)
                     else:
-                        fgr = fgr * pha.gt(0)
-                        com = torch.cat([fgr, pha], dim=-3)
-                    writer_com.write(com[0])
+                        # fgr = fgr * pha.gt(0)
+                        # com = torch.cat([fgr, pha], dim=-3)
+                        result2composition(src[0], pha[0], img_path[0], output_source=output_composition)
+                        # com = pha
+                    # writer_com.write(src[0], pha[0], img_path[0])
                 
                 bar.update(src.size(1))
 
@@ -173,21 +181,42 @@ if __name__ == '__main__':
     from model import MattingNetwork
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--variant', type=str, required=True, choices=['mobilenetv3', 'resnet50'])
-    parser.add_argument('--checkpoint', type=str, required=True)
-    parser.add_argument('--device', type=str, required=True)
-    parser.add_argument('--input-source', type=str, required=True)
+    parser.add_argument('--variant', type=str, choices=['mobilenetv3', 'resnet50'])
+    parser.add_argument('--checkpoint', type=str,)
+    parser.add_argument('--device', type=str,)
+    parser.add_argument('--input-source', type=str,)
     parser.add_argument('--input-resize', type=int, default=None, nargs=2)
     parser.add_argument('--downsample-ratio', type=float)
     parser.add_argument('--output-composition', type=str)
     parser.add_argument('--output-alpha', type=str)
     parser.add_argument('--output-foreground', type=str)
-    parser.add_argument('--output-type', type=str, required=True, choices=['video', 'png_sequence'])
+    parser.add_argument('--output-type', type=str, choices=['video', 'png_sequence'])
     parser.add_argument('--output-video-mbps', type=int, default=1)
     parser.add_argument('--seq-chunk', type=int, default=1)
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--disable-progress', action='store_true')
+    parser.add_argument('--eval', action="store_true")
     args = parser.parse_args()
+    
+    if args.eval:
+        run_eval_miou(args.input_source, args.output_alpha)
+        sys.exit()
+
+
+    if args.output_composition != None:
+        if os.path.exists(args.output_composition):
+            shutil.rmtree(args.output_composition)
+        os.makedirs(args.output_composition)
+
+    if args.output_alpha != None:
+        if os.path.exists(args.output_alpha):
+            shutil.rmtree(args.output_alpha)
+        os.makedirs(args.output_alpha)
+
+    if args.output_foreground != None:
+        if os.path.exists(args.output_foreground):
+            shutil.rmtree(args.output_foreground)
+        os.makedirs(args.output_foreground)
     
     converter = Converter(args.variant, args.checkpoint, args.device)
     converter.convert(
