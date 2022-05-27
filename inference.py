@@ -16,14 +16,19 @@ import os
 import sys
 import torch
 import shutil
+import warnings
+
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from typing import Optional, Tuple
 from tqdm.auto import tqdm
 
-from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
+from inference_utils import VideoReader, ImageSequenceReader, ImageSequenceWriter
+from utils import VideoWriter
 
-from utils import result2composition, result2mask, run_eval_miou
+from utils import result2composition, result2mask, run_eval_miou, interact_segmentation
+
+warnings.filterwarnings("ignore")
 
 def convert_video(model,
                   input_source: str,
@@ -138,7 +143,8 @@ def convert_video(model,
                     result2mask(pha[0], img_path[0], output_source=output_alpha)
                 if output_composition is not None:
                     if output_type == 'video':
-                        com = fgr * pha + bgr * (1 - pha)
+                        # com = fgr * pha + bgr * (1 - pha)
+                        writer_com.write(src[0], pha[0])
                     else:
                         # fgr = fgr * pha.gt(0)
                         # com = torch.cat([fgr, pha], dim=-3)
@@ -169,9 +175,12 @@ class Converter:
     def __init__(self, variant: str, checkpoint: str, device: str):
         self.model = MattingNetwork(variant).eval().to(device)
         self.model.load_state_dict(torch.load(checkpoint, map_location=device))
-        self.model = torch.jit.script(self.model)
-        self.model = torch.jit.freeze(self.model)
+        # self.model = torch.jit.script(self.model)
+        # self.model = torch.jit.freeze(self.model)
         self.device = device
+
+    def interact_segm(self, *args, **kwargs):
+        interact_segmentation(self.model, device=self.device, dtype=torch.float32, *args, **kwargs)
     
     def convert(self, *args, **kwargs):
         convert_video(self.model, device=self.device, dtype=torch.float32, *args, **kwargs)
@@ -196,29 +205,33 @@ if __name__ == '__main__':
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--disable-progress', action='store_true')
     parser.add_argument('--eval', action="store_true")
+    parser.add_argument('--interact-segm', action="store_true")
     args = parser.parse_args()
     
     if args.eval:
         run_eval_miou(args.input_source, args.output_alpha)
         sys.exit()
 
+    converter = Converter(args.variant, args.checkpoint, args.device)
+    if args.interact_segm:
+        converter.interact_segm(input_source=args.input_source)
+        sys.exit()
 
-    if args.output_composition != None:
+    if args.output_composition != None and os.path.isdir(args.output_composition):
         if os.path.exists(args.output_composition):
             shutil.rmtree(args.output_composition)
         os.makedirs(args.output_composition)
 
-    if args.output_alpha != None:
+    if args.output_alpha != None and os.path.isdir(args.output_alpha):
         if os.path.exists(args.output_alpha):
             shutil.rmtree(args.output_alpha)
         os.makedirs(args.output_alpha)
 
-    if args.output_foreground != None:
+    if args.output_foreground != None and os.path.isdir(args.output_foreground):
         if os.path.exists(args.output_foreground):
             shutil.rmtree(args.output_foreground)
         os.makedirs(args.output_foreground)
     
-    converter = Converter(args.variant, args.checkpoint, args.device)
     converter.convert(
         input_source=args.input_source,
         input_resize=args.input_resize,

@@ -13,6 +13,7 @@ class VideoReader(Dataset):
         self.video = pims.PyAVVideoReader(path)
         self.rate = self.video.frame_rate
         self.transform = transform
+        self.path = path
         
     @property
     def frame_rate(self):
@@ -26,7 +27,7 @@ class VideoReader(Dataset):
         frame = Image.fromarray(np.asarray(frame))
         if self.transform is not None:
             frame = self.transform(frame)
-        return frame
+        return frame, self.path
 
 
 class VideoWriter:
